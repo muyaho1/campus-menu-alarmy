@@ -172,16 +172,44 @@ def install_task_scheduler():
     task_name = "PNU_YangsanDorm_MealAlarm"
 
     # 한글/공백 경로 문제를 피하기 위해 bat 파일 생성
-    bat_path = os.path.join(os.path.dirname(script_path), "run_meal_alarm.bat")
+    script_dir = os.path.dirname(script_path)
+    bat_path = os.path.join(script_dir, "run_meal_alarm.bat")
     with open(bat_path, "w", encoding="utf-8") as f:
-        f.write(f'@echo off\n"{python_path}" "{script_path}"\n')
+        f.write(f'@echo off\ncd /d "{script_dir}"\n"{python_path}" "{script_path}"\n')
+
+    # XML로 등록하여 시작 디렉토리(WorkingDirectory) 지정
+    xml_path = os.path.join(script_dir, "task.xml")
+    xml_content = f"""<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Triggers>
+    <CalendarTrigger>
+      <StartBoundary>2026-01-01T08:30:00</StartBoundary>
+      <Enabled>true</Enabled>
+      <ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay>
+    </CalendarTrigger>
+  </Triggers>
+  <Settings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <WakeToRun>true</WakeToRun>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <ExecutionTimeLimit>PT1H</ExecutionTimeLimit>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+  </Settings>
+  <Actions>
+    <Exec>
+      <Command>{bat_path}</Command>
+      <WorkingDirectory>{script_dir}</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>"""
+    with open(xml_path, "w", encoding="utf-16") as f:
+        f.write(xml_content)
 
     cmd = [
         "schtasks", "/create",
         "/tn", task_name,
-        "/tr", bat_path,
-        "/sc", "daily",
-        "/st", "08:30",
+        "/xml", xml_path,
         "/f"
     ]
 
