@@ -5,19 +5,18 @@
 1. 디스코드 서버에서 알림 받을 채널 → 설정(톱니바퀴) → 연동 → 웹후크 만들기
 2. 웹훅 URL 복사 → .env 파일에 DISCORD_WEBHOOK_URL=웹훅URL 형태로 저장
 3. 테스트: python meal_alarm.py --test
-4. Windows 작업 스케줄러 등록: python meal_alarm.py --install
 
 필요 패키지: pip install selenium requests python-dotenv
 """
 
 import requests
 import sys
-import subprocess
 import os
 import io
 import re
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from dotenv import load_dotenv
@@ -30,6 +29,50 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
 
 DORM_URL = "https://dorm.pusan.ac.kr/dorm/ydorm"
+KST = ZoneInfo("Asia/Seoul")
+DATE_LINE_RE = re.compile(r"^(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})$")
+MEAL_SECTION_END_MARKERS = ("식단 더보기", "주요일정")
+
+
+def now_kst():
+    return datetime.now(KST)
+
+
+def empty_meal_result(now=None):
+    now = now or now_kst()
+    weekdays = ["월", "화", "수", "목", "금", "토", "일"]
+    return {
+        "date": now.strftime("%Y-%m-%d"),
+        "weekday": weekdays[now.weekday()],
+        "lunch": None,
+        "dinner": None,
+    }
+
+
+def find_meal_section(lines):
+    meal_start = None
+    for i, line in enumerate(lines):
+        if "오늘의 식단" in line:
+            meal_start = i + 1
+            break
+
+    if meal_start is None:
+        return None, None
+
+    meal_end = len(lines)
+    for i in range(meal_start, len(lines)):
+        if any(marker in lines[i] for marker in MEAL_SECTION_END_MARKERS):
+            meal_end = i
+            break
+
+    return meal_start, meal_end
+
+
+def parse_date_line(line):
+    match = DATE_LINE_RE.match(line.strip())
+    if not match:
+        return None
+    return tuple(int(value) for value in match.groups())
 
 
 def get_meal_data():
@@ -43,8 +86,16 @@ def get_meal_data():
 
     driver = webdriver.Chrome(options=options)
     try:
+        try:
+            driver.execute_cdp_cmd("Network.enable", {})
+            driver.execute_cdp_cmd("Network.setCacheDisabled", {"cacheDisabled": True})
+        except Exception:
+            pass
+
         driver.get(DORM_URL)
-        time.sleep(6)
+        time.sleep(3)
+        driver.refresh()
+        time.sleep(3)
 
         body_text = driver.find_element("tag name", "body").text
         return parse_meals(body_text)
@@ -54,48 +105,31 @@ def get_meal_data():
 
 def parse_meals(text):
     """페이지 텍스트에서 오늘 점심/저녁 식단을 추출한다."""
-    today_date = datetime.now().strftime("%Y-%m-%d")
-    weekdays = ["월", "화", "수", "목", "금", "토", "일"]
-    weekday = weekdays[datetime.now().weekday()]
-
-    lines = text.split("\n")
-
-    # "오늘의 식단" 이후 텍스트에서 오늘 날짜 블록 찾기
-    meal_start = None
-    for i, line in enumerate(lines):
-        if "오늘의 식단" in line:
-            meal_start = i + 1
-            break
+    now = now_kst()
+    empty_result = empty_meal_result(now)
+    lines = text.splitlines()
+    meal_start, meal_end = find_meal_section(lines)
 
     if meal_start is None:
-        return {"date": today_date, "weekday": weekday, "lunch": None, "dinner": None}
+        return empty_result
 
-    # 오늘 날짜 블록 시작 찾기
     today_block_start = None
-    for i in range(meal_start, len(lines)):
-        # 날짜 패턴: "2026. 03. 12" 또는 "2026. 3. 12"
-        if re.match(r'\d{4}\.\s*\d{1,2}\.\s*\d{1,2}', lines[i].strip()):
-            date_in_line = lines[i].strip()
-            # 오늘 날짜인지 확인
-            nums = re.findall(r'\d+', date_in_line)
-            if len(nums) >= 3:
-                y, m, d = int(nums[0]), int(nums[1]), int(nums[2])
-                now = datetime.now()
-                if y == now.year and m == now.month and d == now.day:
-                    today_block_start = i + 1
-                    break
+    for i in range(meal_start, meal_end):
+        date_parts = parse_date_line(lines[i])
+        if date_parts == (now.year, now.month, now.day):
+            today_block_start = i + 1
+            break
 
     if today_block_start is None:
-        return {"date": today_date, "weekday": weekday, "lunch": None, "dinner": None}
+        return empty_result
 
-    # 다음 날짜 블록 또는 "식단 더보기" 전까지가 오늘 블록
-    today_block_end = len(lines)
-    for i in range(today_block_start, len(lines)):
-        if re.match(r'\d{4}\.\s*\d{1,2}\.\s*\d{1,2}', lines[i].strip()) or "식단 더보기" in lines[i] or "주요일정" in lines[i]:
+    # 오늘 날짜 블록 안에서만 점심/저녁을 추출한다.
+    today_block_end = meal_end
+    for i in range(today_block_start, meal_end):
+        if parse_date_line(lines[i]):
             today_block_end = i
             break
 
-    # 오늘 블록에서 점심/저녁 추출
     today_lines = lines[today_block_start:today_block_end]
     current_meal = None
     lunch_items = []
@@ -125,8 +159,8 @@ def parse_meals(text):
             dinner_items.extend(menu_items)
 
     return {
-        "date": today_date,
-        "weekday": weekday,
+        "date": empty_result["date"],
+        "weekday": empty_result["weekday"],
         "lunch": lunch_items if lunch_items else None,
         "dinner": dinner_items if dinner_items else None,
     }
@@ -164,73 +198,10 @@ def send_discord(message):
                 raise
 
 
-def install_task_scheduler():
-    """Windows 작업 스케줄러에 매일 아침 8:30 실행 등록."""
-    script_path = os.path.abspath(__file__)
-    python_path = sys.executable
-
-    task_name = "PNU_YangsanDorm_MealAlarm"
-
-    # 한글/공백 경로 문제를 피하기 위해 bat 파일 생성
-    script_dir = os.path.dirname(script_path)
-    bat_path = os.path.join(script_dir, "run_meal_alarm.bat")
-    with open(bat_path, "w", encoding="utf-8") as f:
-        f.write(f'@echo off\ncd /d "{script_dir}"\n"{python_path}" "{script_path}"\n')
-
-    # XML로 등록하여 시작 디렉토리(WorkingDirectory) 지정
-    xml_path = os.path.join(script_dir, "task.xml")
-    xml_content = f"""<?xml version="1.0" encoding="UTF-16"?>
-<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <Triggers>
-    <CalendarTrigger>
-      <StartBoundary>2026-01-01T08:30:00</StartBoundary>
-      <Enabled>true</Enabled>
-      <ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay>
-    </CalendarTrigger>
-  </Triggers>
-  <Settings>
-    <AllowStartOnDemand>true</AllowStartOnDemand>
-    <WakeToRun>true</WakeToRun>
-    <StartWhenAvailable>true</StartWhenAvailable>
-    <AllowHardTerminate>true</AllowHardTerminate>
-    <ExecutionTimeLimit>PT1H</ExecutionTimeLimit>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-  </Settings>
-  <Actions>
-    <Exec>
-      <Command>{bat_path}</Command>
-      <WorkingDirectory>{script_dir}</WorkingDirectory>
-    </Exec>
-  </Actions>
-</Task>"""
-    with open(xml_path, "w", encoding="utf-16") as f:
-        f.write(xml_content)
-
-    cmd = [
-        "schtasks", "/create",
-        "/tn", task_name,
-        "/xml", xml_path,
-        "/f"
-    ]
-
-    print(f"BAT 파일 생성: {bat_path}")
-    print()
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode == 0:
-        print(f"작업 스케줄러 등록 완료! 매일 08:30에 식단 알림이 전송됩니다.")
-        print(f"작업 이름: {task_name}")
-    else:
-        print(f"등록 실패: {result.stderr}")
-        print("관리자 권한으로 실행해보세요.")
-
-
 def main():
     if len(sys.argv) > 1:
         if sys.argv[1] == "--test":
             print("테스트 모드: 오늘 식단을 가져와서 전송합니다.")
-        elif sys.argv[1] == "--install":
-            install_task_scheduler()
-            return
 
     print("행림관 식단 크롤링 중...")
     result = get_meal_data()

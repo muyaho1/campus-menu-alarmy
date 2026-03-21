@@ -6,7 +6,7 @@
 
 - Selenium으로 [부산대 대학생활원](https://dorm.pusan.ac.kr/dorm/ydorm) 페이지에서 행림관 식단 크롤링
 - 오늘의 **점심 / 저녁** 메뉴를 디스코드 채널에 자동 전송
-- Windows 작업 스케줄러를 이용한 매일 아침 자동 실행
+- GitHub Actions를 이용한 매일 오전 08:30(KST) 자동 실행
 
 ## 미리보기
 
@@ -41,18 +41,19 @@ Chrome 브라우저가 설치되어 있어야 합니다.
 ## 설정
 
 1. 디스코드 서버에서 알림 받을 채널 → **채널 설정(톱니바퀴)** → **연동** → **웹후크 만들기**
-2. 웹훅 URL을 복사하여 `.env` 파일 생성:
+2. 로컬 테스트용으로 웹훅 URL을 복사하여 `.env` 파일 생성:
 
 ```
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/여기에_웹훅_URL
 ```
 
+3. GitHub 저장소의 `Settings > Secrets and variables > Actions`에서 `DISCORD_WEBHOOK_URL` 시크릿을 같은 값으로 등록
+
 ## 사용법
 
 ```bash
-# 테스트 (즉시 식단 전송)
+# 로컬 테스트 (즉시 식단 전송)
 python meal_alarm.py --test
-
-# Windows 작업 스케줄러에 매일 08:30 자동 실행 등록 (관리자 권한 필요)
-python meal_alarm.py --install
 ```
+
+자동 실행은 GitHub Actions 워크플로 `.github/workflows/meal_alarm.yml`에서 매일 오전 08:30(KST)로 설정되어 있습니다.
