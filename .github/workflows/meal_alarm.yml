@@ -28,4 +28,5 @@ jobs:
       - name: Send meal alarm
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TZ: Asia/Seoul
         run: python meal_alarm.py

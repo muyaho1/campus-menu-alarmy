@@ -87,6 +87,7 @@ def get_meal_data():
     driver = webdriver.Chrome(options=options)
     try:
         try:
+            driver.execute_cdp_cmd("Emulation.setTimezoneOverride", {"timezoneId": "Asia/Seoul"})
             driver.execute_cdp_cmd("Network.enable", {})
             driver.execute_cdp_cmd("Network.setCacheDisabled", {"cacheDisabled": True})
         except Exception:
